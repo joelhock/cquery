@@ -32,6 +32,8 @@ optional<lsDiagnostic> BuildAndDisposeDiagnostic(CXDiagnostic diagnostic,
   clang_getSpellingLocation(clang_getDiagnosticLocation(diagnostic), &file,
                             &start_line, &start_column, nullptr);
 
+  bool isHeader = false;
+  unsigned end_line = start_line, end_column = start_column;
   // No diagnostic file.
   if (!file) {
     clang_disposeDiagnostic(diagnostic);
@@ -40,39 +42,51 @@ optional<lsDiagnostic> BuildAndDisposeDiagnostic(CXDiagnostic diagnostic,
   // Diagnostic path does not match our required path.
   optional<AbsolutePath> cx_file_path = FileName(file);
   if (!cx_file_path || path != *cx_file_path) {
-    clang_disposeDiagnostic(diagnostic);
-    return nullopt;
-  }
+    // this is likely a diagnostic for a header.
+    // LOG_S(ERROR) << "[xxx]  " << path << " ; " << FileName(file);
+    // LOG_S(ERROR) << "[xxx]  " << start_line << " ; " << start_column;
 
-  unsigned end_line = start_line, end_column = start_column,
-           num_ranges = clang_getDiagnosticNumRanges(diagnostic);
-  for (unsigned i = 0; i < num_ranges; i++) {
-    CXFile file0, file1;
-    unsigned line0, column0, line1, column1;
-    CXSourceRange range = clang_getDiagnosticRange(diagnostic, i);
-    clang_getSpellingLocation(clang_getRangeStart(range), &file0, &line0,
-                              &column0, nullptr);
-    clang_getSpellingLocation(clang_getRangeEnd(range), &file1, &line1,
-                              &column1, nullptr);
-    if (file0 != file1 || file0 != file)
-      continue;
-    if (line0 < start_line || (line0 == start_line && column0 < start_column)) {
-      start_line = line0;
-      start_column = column0;
-    }
-    if (line1 > end_line || (line1 == end_line && column1 > end_column)) {
-      end_line = line1;
-      end_column = column1;
+    isHeader = true;
+    start_line = end_line = 1;
+    start_column = end_column = 1;
+    // clang_disposeDiagnostic(diagnostic);
+    // return nullopt;
+  } else {
+
+    unsigned num_ranges = clang_getDiagnosticNumRanges(diagnostic);
+    for (unsigned i = 0; i < num_ranges; i++) {
+      CXFile file0, file1;
+      unsigned line0, column0, line1, column1;
+      CXSourceRange range = clang_getDiagnosticRange(diagnostic, i);
+      clang_getSpellingLocation(clang_getRangeStart(range), &file0, &line0,
+                                &column0, nullptr);
+      clang_getSpellingLocation(clang_getRangeEnd(range), &file1, &line1,
+                                &column1, nullptr);
+      if (file0 != file1 || file0 != file) {
+        continue;
+      }
+
+      if (line0 < start_line || (line0 == start_line && column0 < start_column)) {
+        start_line = line0;
+        start_column = column0;
+      }
+      if (line1 > end_line || (line1 == end_line && column1 > end_column)) {
+        end_line = line1;
+        end_column = column1;
+      }
     }
   }
-
   // Build diagnostic.
   lsDiagnostic ls_diagnostic;
   ls_diagnostic.range = lsRange(lsPosition(start_line - 1, start_column - 1),
                                 lsPosition(end_line - 1, end_column - 1));
 
   ls_diagnostic.message = ToString(clang_getDiagnosticSpelling(diagnostic));
-
+  if (isHeader) {
+    ls_diagnostic.message = (std::string)*cx_file_path + ":" + std::to_string(start_line) + ":" + std::to_string(start_column) + " " + ls_diagnostic.message;
+    start_line = end_line = 1;
+    start_column = end_column = 1;
+  }
   // Append the flag that enables this diagnostic, ie, [-Wswitch]
   std::string enabling_flag =
       ToString(clang_getDiagnosticOption(diagnostic, nullptr));
@@ -98,17 +112,18 @@ optional<lsDiagnostic> BuildAndDisposeDiagnostic(CXDiagnostic diagnostic,
   }
 
   // Report fixits
-  unsigned num_fixits = clang_getDiagnosticNumFixIts(diagnostic);
-  for (unsigned i = 0; i < num_fixits; ++i) {
-    CXSourceRange replacement_range;
-    CXString text = clang_getDiagnosticFixIt(diagnostic, i, &replacement_range);
+  if(!isHeader) {
+    unsigned num_fixits = clang_getDiagnosticNumFixIts(diagnostic);
+    for (unsigned i = 0; i < num_fixits; ++i) {
+      CXSourceRange replacement_range;
+      CXString text = clang_getDiagnosticFixIt(diagnostic, i, &replacement_range);
 
-    lsTextEdit edit;
-    edit.newText = ToString(text);
-    edit.range = GetLsRangeForFixIt(replacement_range);
-    ls_diagnostic.fixits_.push_back(edit);
+      lsTextEdit edit;
+      edit.newText = ToString(text);
+      edit.range = GetLsRangeForFixIt(replacement_range);
+      ls_diagnostic.fixits_.push_back(edit);
+    }
   }
-
   clang_disposeDiagnostic(diagnostic);
 
   return ls_diagnostic;
