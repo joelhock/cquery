@@ -50,7 +50,7 @@ std::vector<std::string> ExtractSystemIncludePaths(
       line = line.substr(0, line.size() - sizeof(kIncludePostfixToRemove) + 1);
       output.push_back("-iframework" + line);
     } else {
-      output.push_back("-isystem" + line);
+      output.push_back("-idirafter" + line);
     }
   }
 
