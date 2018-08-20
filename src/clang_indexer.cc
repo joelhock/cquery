@@ -2292,17 +2292,37 @@ optional<std::vector<std::unique_ptr<IndexFile>>> Parse(
 
     if (param.primary_file) {
       // If there are errors, show at least one at the include position.
+      if (entry->path == file) {
+        // lolz, this was added by my header-in-header code from below;
+        // skip it so it's not double-included
+        continue;
+      }
       auto it = inc_to_line.find(entry->path);
+      int line;
+      bool header = false;
       if (it != inc_to_line.end()) {
-        int line = it->second;
-        for (auto ls_diagnostic : entry->diagnostics_) {
-          if (ls_diagnostic.severity != lsDiagnosticSeverity::Error)
-            continue;
-          ls_diagnostic.range =
-              lsRange(lsPosition(line, 10), lsPosition(line, 10));
-          param.primary_file->diagnostics_.push_back(ls_diagnostic);
-          break;
+        line = it->second;
+      } else {
+        // couldn't find a matching include; likely it was an include of
+        // an include.  Just put on the first line and prepend the
+        // path to the diagnostic message.
+        line = 0;
+        header = true;
+      }
+      for (auto ls_diagnostic : entry->diagnostics_) {
+        if (ls_diagnostic.severity != lsDiagnosticSeverity::Error)
+          continue;
+        if (header) {
+          ls_diagnostic.message =
+              "Nested header " + (std::string)entry->IndexFile::path + ":" +
+              std::to_string(ls_diagnostic.range.start.line + 1) + ":" +
+              std::to_string(ls_diagnostic.range.start.character + 1) + " " +
+              ls_diagnostic.message;
         }
+        ls_diagnostic.range =
+            lsRange(lsPosition(line, 10), lsPosition(line, 10));
+        param.primary_file->diagnostics_.push_back(ls_diagnostic);
+        break;
       }
     }
 
